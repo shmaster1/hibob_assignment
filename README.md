@@ -166,6 +166,10 @@ erDiagram
     CONTRACT_ITEM_LINK ||--o{ DAILY_USAGE : tracks
 ```
 
+## Assumptions
+
+- A customer may have multiple contracts over time (e.g., renewals or upgrades). The current model simplifies this to a 1:1 relationship, but the schema should add a `contract_id` FK on the `invoice` table if multi-contract support is needed.
+
 ## ERP Synchronization
 
 1. Billing Rating System calculates finalized charges.
