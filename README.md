@@ -147,16 +147,16 @@ postgres=# SELECT * FROM invoice;
 
 ## Relationships
 
-```text
-customer             1 -> 1     contract
-contract             1 -> many  contract_item_link
-item                 1 -> many  contract_item_link
-contract_item_link   1 -> many  daily_usage
-invoice              1 -> many  charge
-customer             1 -> many  invoice
-contract             1 -> many  invoice
+```mermaid
+erDiagram
+    CUSTOMER ||--|| CONTRACT : has
+    CUSTOMER ||--o{ INVOICE : receives
+    CONTRACT ||--o{ CONTRACT_ITEM_LINK : contains
+    CONTRACT ||--o{ INVOICE : generates
+    ITEM ||--o{ CONTRACT_ITEM_LINK : referenced_in
+    CONTRACT_ITEM_LINK ||--o{ DAILY_USAGE : tracks
+    INVOICE ||--o{ CHARGE : includes
 ```
-
 
 ## ERP Synchronization
 
