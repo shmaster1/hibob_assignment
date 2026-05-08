@@ -33,6 +33,7 @@ An independent cron job runs every night between 02:00 and 04:00. It reads raw u
 
 **3. Billing, rating, and invoicing**
 On each customer's billing date, the Billing/Rating System pulls the accumulated usage from the database and runs the rating process to calculate charges. The resulting invoice is sent to the ERP system, which confirms it and issues it to the customer at 09:00 AM.
+
 ---
 
 ## Database Schema
