@@ -25,6 +25,14 @@ sequenceDiagram
     ERP->>ERP: Issue to customer at 09:00
 ```
 
+**1. Contract setup**
+When a customer signs a contract via the CRM, the Order/Contract System creates the contract and writes all relevant data — including contract line items and financial definitions — to the database.
+
+**2. Daily usage collection**
+An independent cron job runs every night between 02:00 and 04:00. It reads raw usage data from the database, processes it, and stores the accumulated daily usage back. This process runs regardless of any billing activity.
+
+**3. Billing, rating, and invoicing**
+On each customer's billing date, the Billing/Rating System pulls the accumulated usage from the database and runs the rating process to calculate charges. The resulting invoice is sent to the ERP system, which confirms it and issues it to the customer at 09:00 AM.
 ---
 
 ## Database Schema
