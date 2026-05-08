@@ -160,11 +160,10 @@ postgres=# SELECT * FROM invoice;
 erDiagram
     CUSTOMER ||--|| CONTRACT : has
     CUSTOMER ||--o{ INVOICE : receives
-    CONTRACT ||--o{ CONTRACT_ITEM_LINK : contains
+    CONTRACT ||--|{ CONTRACT_ITEM_LINK : contains
     CONTRACT ||--o{ INVOICE : generates
     ITEM ||--o{ CONTRACT_ITEM_LINK : referenced_in
     CONTRACT_ITEM_LINK ||--o{ DAILY_USAGE : tracks
-    INVOICE ||--o{ CHARGE : includes
 ```
 
 ## ERP Synchronization
