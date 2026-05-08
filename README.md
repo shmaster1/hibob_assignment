@@ -1,21 +1,19 @@
 # Usage-Based Billing Process - Exercise (1)
 
 ## Process Flow
-
-```mermaid
 ```mermaid
 sequenceDiagram
-    participant CRM as CRM (Source System)
-    participant OC as Order/Contract System
+    participant CRM as CRM Source System
+    participant OC as Order Contract System
     participant DB as Database
-    participant UC as Usage Collection (Cron 02:00–04:00)
-    participant BR as Billing/Rating System
-    participant ERP as ERP (09:00 AM)
+    participant UC as Usage Collection Cron
+    participant BR as Billing Rating System
+    participant ERP as ERP System
 
     CRM->>OC: Contract signed
     OC->>DB: Write contract data
 
-    Note over DB,UC: Independent daily process (runs in parallel)
+    Note over DB,UC: Independent daily process 02:00 to 04:00
 
     DB->>UC: Cron reads usage data
     UC-->>DB: Store processed usage
@@ -24,9 +22,8 @@ sequenceDiagram
     BR->>BR: Rating process
     BR->>ERP: Generate invoice
     ERP-->>BR: Invoice confirmed
-    ERP->>ERP: Issue to customer
+    ERP->>ERP: Issue to customer at 09:00
 ```
-
 
 ---
 
