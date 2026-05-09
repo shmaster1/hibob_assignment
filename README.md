@@ -162,12 +162,12 @@ postgres=# SELECT * FROM invoice;
 
 ```mermaid
 erDiagram
-    CUSTOMER ||--|| CONTRACT : has
-    CUSTOMER ||--o{ INVOICE : receives
-    CONTRACT ||--|{ CONTRACT_ITEM_LINK : contains
-    CONTRACT ||--o{ INVOICE : generates
-    ITEM ||--o{ CONTRACT_ITEM_LINK : referenced_in
-    CONTRACT_ITEM_LINK ||--o{ DAILY_USAGE : tracks
+    CUSTOMER ||--|| CONTRACT : "1-to-1 | one customer has one contract"
+    CUSTOMER ||--o{ INVOICE : "1-to-many | one customer receives many invoices"
+    CONTRACT ||--|{ CONTRACT_ITEM_LINK : "1-to-many | one contract contains many line items"
+    CONTRACT ||--o{ INVOICE : "1-to-many | one contract generates many invoices over time"
+    ITEM ||--o{ CONTRACT_ITEM_LINK : "1-to-many | one item can appear in many contracts"
+    CONTRACT_ITEM_LINK ||--o{ DAILY_USAGE : "1-to-many | one line item tracks many daily usage records"
 ```
 
 ## Assumptions
