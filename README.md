@@ -6,33 +6,37 @@ sequenceDiagram
     participant CRM as CRM Source System
     participant OC as Order Contract System
     participant DB as Database
-    participant UC as Usage Collection Cron
-    participant BR as Billing Rating System
-    participant ERP as ERP System
+    participant UC as Usage Collection [CRON]
+    participant BR as Billing & Rating [CRON + REST]
+    participant ERP as ERP System [REST]
 
-    CRM->>OC: Contract signed
-    OC->>DB: Write contract data
+    CRM->>OC: Customer signs contract
+    OC->>DB: Write contract, line items & financial definitions
 
-    Note over DB,UC: Independent daily process 02:00 to 04:00
+    Note over UC: CRON Job — runs daily 02:00–04:00
 
-    DB->>UC: Cron reads usage data
-    UC-->>DB: Store processed usage
+    UC->>DB: Query unprocessed usage records
+    UC-->>DB: Aggregate & store daily totals (mark as processed)
 
-    DB->>BR: Pull accumulated usage
-    BR->>BR: Rating process
-    BR->>ERP: Generate invoice
-    ERP-->>BR: Invoice confirmed
-    ERP->>ERP: Issue to customer at 09:00
+    Note over BR: CRON Job — runs daily ~08:00
+
+    BR->>DB: Query contracts where billing day = today
+    DB-->>BR: Return due customers + accumulated usage
+    BR->>BR: Rating engine calculates charges per line item
+    BR->>ERP: POST invoice payload (REST API)
+    ERP-->>BR: 200 OK — invoice ID + status
+    BR-->>DB: Update invoice table with ERP reference
+    ERP->>ERP: Issue invoice to customer at 09:00
 ```
 
 **1. Contract setup**
-When a customer signs a contract via the CRM, the Order/Contract System creates the contract and writes all relevant data — including contract line items and financial definitions — to the database.
+The process starts in the CRM when a customer signs a contract. The Order/Contract System receives the event and persists the full contract record to the database — including the `contract_start_date`, all line items, and the financial definitions that map each product to an ERP billing code. This date becomes the anchor for every future billing cycle.
 
-**2. Daily usage collection**
-An independent cron job runs every night between 02:00 and 04:00. It reads raw usage data from the database, processes it, and stores the accumulated daily usage back. This process runs regardless of any billing activity.
+**2. Daily usage collection — CRON Job (02:00–04:00)**
+A CRON job runs every night in a fixed window. It queries all usage records that have not yet been processed, aggregates them by customer and product into daily totals, writes those totals to `daily_usage`, and marks each source row as processed. This prevents double-counting on the next run and keeps the job idempotent. The process is completely independent of billing — it runs every night regardless of whether any invoice is due.
 
-**3. Billing, rating, and invoicing**
-On each customer's billing date, the Billing/Rating System pulls the accumulated usage from the database and runs the rating process to calculate charges. The resulting invoice is sent to the ERP system, which confirms it and issues it to the customer at 09:00 AM.
+**3. Billing, rating, and invoicing — CRON Job + REST**
+A second CRON job runs each morning (around 08:00, before the 09:00 issuance deadline). To determine which customers owe an invoice today, it queries the `contract` table for all active contracts where the **day-of-month of `contract_start_date` equals today's date** — for example, on the 15th it finds every customer whose contract started on any 15th. For each matched customer, the Rating engine pulls all `daily_usage` rows accumulated since the last billing cycle and calculates the total charge per line item (usage-based items priced by consumption, fixed items by unit). The finalized invoice is pushed to the ERP system via a REST API call. The ERP returns a confirmation with an invoice ID, the internal `invoice` table is updated with that reference, and the ERP issues the invoice to the customer at 09:00 AM.
 
 ---
 
