@@ -36,7 +36,7 @@ The process starts in the CRM when a customer signs a contract. The Order/Contra
 A CRON job runs every night in a fixed window. It queries all usage records that have not yet been processed, aggregates them by customer and product into daily totals, writes those totals to `daily_usage`, and marks each source row as processed. This prevents double-counting on the next run and keeps the job idempotent. The process is completely independent of billing — it runs every night regardless of whether any invoice is due.
 
 **3. Billing, rating, and invoicing — CRON Job + REST**
-A second CRON job runs each morning (around 08:00, before the 09:00 issuance deadline). To determine which customers owe an invoice today, it queries the `contract` table for all active contracts where the **day-of-month of `contract_start_date` equals today's date** — for example, on the 15th it finds every customer whose contract started on any 15th. For each matched customer, the Rating engine pulls all `daily_usage` rows accumulated since the last billing cycle and calculates the total charge per line item (usage-based items priced by consumption, fixed items by unit). The finalized invoice is pushed to the ERP system via a REST API call. The ERP returns a confirmation with an invoice ID, the internal `invoice` table is updated with that reference, and the ERP issues the invoice to the customer at 09:00 AM.
+A second CRON job runs each morning (around 08:00, before the 09:00 issuance deadline). To determine which customers owe an invoice today, it queries the `contract` table for all active contracts where the **day-of-month of `contract_start_date` equals today's date** — for example, on the 15th it finds every customer whose contract started on any 15th. For each matched customer, the Rating engine pulls all `daily_usage` rows accumulated since the last billing cycle and calculates the total charge per line item (usage-based items priced by consumption, fixed items by unit). The finalized invoice is pushed to the ERP system via a REST API call. The ERP returns a confirmation with an invoice ID, which is stored in the `erp_invoice_id` column of the internal `invoice` table — enabling reconciliation and preventing duplicate submissions on retries. The ERP then issues the invoice to the customer at 09:00 AM.
 
 ---
 
@@ -146,13 +146,13 @@ postgres=# SELECT * FROM daily_usage;
 ```sql
 postgres=# SELECT * FROM invoice;
 
- id | customer_id | total_price | billing_date
-----+-------------+-------------+---------------
-  1 |           1 |        1200 | Feb-15-2026
-  2 |           2 |        3700 | Mar-20-2026
-  3 |           3 |         950 | Mar-06-2026
-  4 |           4 |        2100 | Apr-01-2026
-  5 |           5 |        4300 | Apr-12-2026
+ id | customer_id | total_price | billing_date | erp_invoice_id | erp_status
+----+-------------+-------------+--------------+----------------+------------
+  1 |           1 |        1200 | Feb-15-2026  | ERP-10021      | confirmed
+  2 |           2 |        3700 | Mar-20-2026  | ERP-10034      | confirmed
+  3 |           3 |         950 | Mar-06-2026  | ERP-10028      | confirmed
+  4 |           4 |        2100 | Apr-01-2026  | ERP-10045      | confirmed
+  5 |           5 |        4300 | Apr-12-2026  | NULL           | failed
 ```
 
 ---
@@ -180,12 +180,14 @@ erDiagram
 2. Middleware/API layer transforms internal billing schema into ERP-compatible format.
 3. Invoice data is sent to ERP through REST API integration.
 4. ERP creates the official invoice and returns invoice ID + status.
-5. Internal `invoice` table is updated accordingly.
+5. Internal `invoice` table is updated with `erp_invoice_id` and `erp_status` accordingly.
 
 ---
 
 ## Error Handling & Monitoring
 
+- Any invoice with `erp_invoice_id IS NULL` was never successfully confirmed by the ERP — the billing CRON queries this on retry runs to re-attempt only unconfirmed submissions.
+- `erp_status = 'failed'` distinguishes a rejected ERP call from `pending` (not yet attempted), giving on-call engineers precise visibility into what went wrong and at which stage.
 - Failed ERP synchronizations are logged and retried automatically.
 - Billing process stops if usage data is incomplete.
 - Monitoring alerts if invoices are not generated before 09:00.
