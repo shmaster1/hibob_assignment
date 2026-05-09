@@ -188,11 +188,8 @@ erDiagram
 
 - Any invoice with `erp_invoice_id IS NULL` was never successfully confirmed by the ERP — the billing CRON queries this on retry runs to re-attempt only unconfirmed submissions.
 - `erp_status = 'failed'` distinguishes a rejected ERP call from `pending` (not yet attempted), giving on-call engineers precise visibility into what went wrong and at which stage.
-- Failed ERP synchronizations are logged and retried automatically.
-- Billing process stops if usage data is incomplete.
+- Billing process stops if usage data is incomplete — any invoice generated without full data would be incorrect, and a wrong invoice sent to a customer is harder to recover from than a delayed one.
 - Monitoring alerts if invoices are not generated before 09:00.
-- Dead-letter queue isolates failed records without stopping the full billing cycle.
-- Daily scheduled jobs are monitored for completion status.
 
 ---
 
