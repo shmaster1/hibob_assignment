@@ -1,12 +1,7 @@
-import axios from 'axios';
-import { Customer, TokenDetails, ARQuery } from './types';
+const axios = require('axios');
 
-export class NetSuiteARManager {
-  private baseUrl: string;
-  private suiteqlEndpoint: string;
-  private headers: Record<string, string>;
-
-  constructor(accountId: string, tokenDetails: TokenDetails) {
+class NetSuiteARManager {
+  constructor(accountId, tokenDetails) {
     this.baseUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest`;
     this.suiteqlEndpoint = `${this.baseUrl}/query/v1/suiteql`;
     this.headers = {
@@ -15,9 +10,9 @@ export class NetSuiteARManager {
     };
   }
 
-  async getTopLevelCustomers(): Promise<Customer[]> {
+  async getTopLevelCustomers() {
     const query = `SELECT id, entityid FROM customer WHERE parent IS NULL`;
-    const customers: Customer[] = [];
+    const customers = [];
     let offset = 0;
     const limit = 1000;
 
@@ -36,7 +31,7 @@ export class NetSuiteARManager {
     return customers;
   }
 
-  async calculateCumulativeAR(parentId: number): Promise<number | null> {
+  async calculateCumulativeAR(parentId) {
     const query = `
       SELECT SUM(amountremaining) AS total_ar
       FROM transaction
@@ -52,7 +47,7 @@ export class NetSuiteARManager {
         { q: query },
         { headers: this.headers }
       );
-      const data: ARQuery = response.data.items?.[0] ?? { total_ar: 0 };
+      const data = response.data.items?.[0] ?? { total_ar: 0 };
       return Number(data.total_ar ?? 0);
     } catch (error) {
       console.error(`Failed to calculate AR for parent ${parentId}:`, error);
@@ -60,7 +55,7 @@ export class NetSuiteARManager {
     }
   }
 
-  async updateParentRecord(parentId: number, amount: number): Promise<void> {
+  async updateParentRecord(parentId, amount) {
     const endpoint = `${this.baseUrl}/record/v1/customer/${parentId}`;
 
     try {
@@ -79,7 +74,7 @@ export class NetSuiteARManager {
     }
   }
 
-  async runARConsolidation(): Promise<void> {
+  async runARConsolidation() {
     const customers = await this.getTopLevelCustomers();
     for (const customer of customers) {
       const totalAmount = await this.calculateCumulativeAR(customer.id);
@@ -89,4 +84,6 @@ export class NetSuiteARManager {
     }
   }
 }
+
+module.exports = { NetSuiteARManager };
 
