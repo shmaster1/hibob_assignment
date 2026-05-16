@@ -310,7 +310,7 @@ The script reads and writes two NetSuite record types. Below is how each record 
 ### Customer Record
 
 ```
-Customer: HiBob HQ                                           [Edit] [Actions ▾]
+Customer: HiBob HQ                                           
 ─────────────────────────────────────────────────────────────────────────────────
  PRIMARY INFORMATION
 
@@ -332,7 +332,7 @@ Customer: HiBob HQ                                           [Edit] [Actions ▾
 ### Invoice Record (Transaction)
 
 ```
-Invoice: INV-1                                               [Edit] [Actions ▾]
+Invoice: INV-1                                          
 ─────────────────────────────────────────────────────────────────────────────────
  HEADER
 
