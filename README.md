@@ -294,33 +294,39 @@ Finally, the system writes the total sum into the custentity_cumulative_ar field
 
 The following tables demonstrate the logic across three distinct scenarios: HiBob Group (Parent-Sub), Wix Group (Parent-Sub), and Monday.com (Standalone).
 
-### Customer Entity Table
-```sql
-postgres=# SELECT id, name, parent_fk, custentity_cumulative_ar FROM customers;
+### Customer List View
 
- id | name         | parent_fk | custentity_cumulative_ar
-----+--------------+-----------+--------------------------
-  1 | HiBob HQ     | [NULL]    | 23000
-  2 | Fiverr       | 1         | [NULL]
-  3 | Wiz          | 1         | [NULL]
-  4 | Wix HQ       | [NULL]    | 12000
-  5 | Canva        | 4         | [NULL]
-  6 | Figma        | 4         | [NULL]
-  7 | Monday.com   | [NULL]    | 5000
+```
+Customers                                                        [New ▾] [Actions ▾]
+─────────────────────────────────────────────────────────────────────────────────────
+ ☐   Edit | View   Internal ID   Name             Parent Customer   Cumulative AR
+─────────────────────────────────────────────────────────────────────────────────────
+ ☐   Edit   View        1        HiBob HQ          —                  $23,000.00
+ ☐   Edit   View        2        Fiverr            HiBob HQ                   —
+ ☐   Edit   View        3        Wiz               HiBob HQ                   —
+ ☐   Edit   View        4        Wix HQ            —                  $12,000.00
+ ☐   Edit   View        5        Canva             Wix HQ                     —
+ ☐   Edit   View        6        Figma             Wix HQ                     —
+ ☐   Edit   View        7        Monday.com        —                   $5,000.00
+─────────────────────────────────────────────────────────────────────────────────────
+ Rows 1–7 of 7
 ```
 
-### Invoice Transaction Table
-```sql
-postgres=# SELECT id, customer_id, amount_remaining, status FROM invoices;
+### Open Transactions (Invoice) List View
 
- id | customer_id | amount_remaining | status | Calculation Impact
-----+------------+------------------+--------+-------------------------------
-  1 | Fiverr     | 10000            | open   | Rolls up to HiBob
-  2 | Wiz        | 13000            | open   | Rolls up to HiBob
-  3 | Canva      | 7000             | open   | Rolls up to Wix
-  4 | Figma      | 5000             | open   | Rolls up to Wix
-  5 | Wix HQ     | 3000             | closed | Ignored (closed status)
-  6 | Monday.com | 5000             | open   | Applied to Monday.com (Self)
+```
+Transactions                                                     [New ▾] [Actions ▾]
+─────────────────────────────────────────────────────────────────────────────────────
+ ☐   Edit | View   Internal ID   Customer          Amount Remaining   Status
+─────────────────────────────────────────────────────────────────────────────────────
+ ☐   Edit   View   INV-1         Fiverr                $10,000.00     Open
+ ☐   Edit   View   INV-2         Wiz                   $13,000.00     Open
+ ☐   Edit   View   INV-3         Canva                  $7,000.00     Open
+ ☐   Edit   View   INV-4         Figma                  $5,000.00     Open
+ ☐   Edit   View   INV-5         Wix HQ                 $3,000.00     Closed
+ ☐   Edit   View   INV-6         Monday.com             $5,000.00     Open
+─────────────────────────────────────────────────────────────────────────────────────
+ Rows 1–6 of 6
 ```
 
 • (Aggregation): For Parent IDs (1, 4), the script aggregates all associated Open debt from the entire hierarchy.
