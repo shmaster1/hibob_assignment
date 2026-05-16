@@ -230,14 +230,111 @@ erDiagram
 | `parent` | Integer (FK → Customers.id) | `NULL` for Parents/Standalones |
 | `custentity_cumulative_ar` | Decimal | Target custom field for aggregation |
 
-### Invoices:
+### Invoices (Transaction):
 | Field              | Type | Notes |
 |--------------------|---|---|
 | `id`               | Integer (PK) | Internal NetSuite invoice ID |
-| `customer_id`      | Integer (FK → Customers.id) | The customer this invoice belongs to |
-| `amount_remaining` | Decimal | Outstanding open balance |
-| `status`           | String | `'open'` or `'closed'` |
+| `customer_id`      | Integer (FK → customer.id) | The customer this invoice belongs to |
+| `amountremaining`  | Currency | Outstanding open balance |
+| `status`           | String | `'Open'` or `'Paid In Full'` |
 
+### NetSuite Data Model
+
+The script operates on two native NetSuite record types. Below is their structure as it appears in the NetSuite Record Browser, showing only the fields relevant to this process.
+
+#### Record: Customer (`customer`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  RECORD TYPE: Customer                                                      │
+│  SuiteQL Table: customer                                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ► Primary Information                                                      │
+│  ┌────────────────┬──────────────┬──────────────┬─────────────────────────┐ │
+│  │ Label          │ Internal ID  │ Type         │ Notes                   │ │
+│  ├────────────────┼──────────────┼──────────────┼─────────────────────────┤ │
+│  │ Internal ID    │ id           │ Integer (PK) │ System-generated        │ │
+│  │ Company Name   │ name         │ Free-Text    │ Display name in UI      │ │
+│  │ Parent         │ parent       │ List/Record  │ FK → customer.id        │ │
+│  │                │              │              │ NULL = top-level        │ │
+│  └────────────────┴──────────────┴──────────────┴─────────────────────────┘ │
+│                                                                             │
+│  ► Custom Fields                                                            │
+│  ┌────────────────┬──────────────────────────┬──────────┬─────────────────┐ │
+│  │ Label          │ Internal ID              │ Type     │ Notes           │ │
+│  ├────────────────┼──────────────────────────┼──────────┼─────────────────┤ │
+│  │ Cumulative AR  │ custentity_cumulative_ar │ Currency │ Write target —  │ │
+│  │                │                          │          │ populated by    │ │
+│  │                │                          │          │ this script     │ │
+│  └────────────────┴──────────────────────────┴──────────┴─────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Record: Invoice (`transaction`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  RECORD TYPE: Invoice                                                       │
+│  SuiteQL Table: transaction                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ► Header                                                                   │
+│  ┌──────────────────┬─────────────────┬──────────────┬────────────────────┐ │
+│  │ Label            │ Internal ID     │ Type         │ Notes              │ │
+│  ├──────────────────┼─────────────────┼──────────────┼────────────────────┤ │
+│  │ Internal ID      │ id              │ Integer (PK) │ System-generated   │ │
+│  │ Customer         │ customer_id     │ List/Record  │ FK → customer.id   │ │
+│  │ Status           │ status          │ List (enum)  │ 'Open' /           │ │
+│  │                  │                 │              │ 'Paid In Full'     │ │
+│  └──────────────────┴─────────────────┴──────────────┴────────────────────┘ │
+│                                                                             │
+│  ► Financial                                                                │
+│  ┌──────────────────┬─────────────────┬──────────────┬────────────────────┐ │
+│  │ Label            │ Internal ID     │ Type         │ Notes              │ │
+│  ├──────────────────┼─────────────────┼──────────────┼────────────────────┤ │
+│  │ Amount Remaining │ amountremaining │ Currency     │ SUM target —       │ │
+│  │                  │                 │              │ open balance       │ │
+│  └──────────────────┴─────────────────┴──────────────┴────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Example Data
+
+**Customers**
+
+| id | name | parent | custentity_cumulative_ar |
+|----|------|--------|--------------------------|
+| 1 | HiBob HQ | NULL | **$23,000.00** |
+| 2 | Fiverr | 1 | NULL |
+| 3 | Wiz | 1 | NULL |
+| 4 | Deel Group | NULL | **$8,500.00** |
+| 5 | Deel US | 4 | NULL |
+| 6 | Deel EU | 4 | NULL |
+| 7 | Monday.com | NULL | **$5,000.00** |
+
+**Invoices**
+
+| id | customer_id | amountremaining | status |
+|----|-------------|-----------------|--------|
+| 101 | 2 (Fiverr) | $10,000.00 | Open |
+| 102 | 3 (Wiz) | $13,000.00 | Open |
+| 103 | 3 (Wiz) | $4,000.00 | Paid In Full |
+| 104 | 5 (Deel US) | $3,500.00 | Open |
+| 105 | 6 (Deel EU) | $5,000.00 | Open |
+| 106 | 7 (Monday.com) | $5,000.00 | Open |
+| 107 | 7 (Monday.com) | $2,000.00 | Paid In Full |
+
+**How the aggregation works:**
+
+- **HiBob HQ (id=1):** Parent with subcustomers 2, 3. Open invoices: $10k (Fiverr) + $13k (Wiz) = **$23,000**. Invoice 103 is excluded (status ≠ Open).
+- **Deel Group (id=4):** Parent with subcustomers 5, 6. Open invoices: $3.5k (Deel US) + $5k (Deel EU) = **$8,500**.
+- **Monday.com (id=7):** Standalone (no parent, no children). Open invoices: $5k = **$5,000**. Invoice 107 is excluded (status ≠ Open).
+- **Subcustomers (ids 2, 3, 5, 6):** `custentity_cumulative_ar` remains NULL — the script only writes to top-level records.
+
+---
 ## Assumptions
 
 - The customer hierarchy is **2 levels deep only**: a top-level parent and its direct subcustomers. Sub-subcustomers (grandchildren) are not supported — the SuiteQL subquery fetches only direct children (`WHERE parent = parentId`), so any deeper nesting would be silently excluded from the AR total.
@@ -303,57 +400,8 @@ Finally, the system writes the total sum into the custentity_cumulative_ar field
 • Performance: The schema allows for efficient querying by filtering only for open statuses, minimizing the processing load on large historical datasets.
 
 ---
-## 3. Record Definitions
 
-The script reads and writes two NetSuite record types. Below is how each record looks when opened in NetSuite, annotated with the internal field IDs used in SuiteQL and `record.submitFields`.
-
-### Customer Record
-
-```
-Customer: HiBob HQ                                           
-─────────────────────────────────────────────────────────────────────────────────
- PRIMARY INFORMATION
-
-   Field Label            Value              Internal Field ID
-   ──────────────────────────────────────────────────────────────────
-   Internal ID            1                  id
-   Company Name           HiBob HQ           entityid
-   Parent Customer        —                  parent             ← NULL = top-level
-   Type                   Company            isperson
-
- CUSTOM FIELDS
-
-   Field Label            Value              Internal Field ID
-   ──────────────────────────────────────────────────────────────────
-   Cumulative AR          $23,000.00         custentity_cumulative_ar   ← write target
-─────────────────────────────────────────────────────────────────────────────────
-```
-
-### Invoice Record (Transaction)
-
-```
-Invoice: INV-1                                          
-─────────────────────────────────────────────────────────────────────────────────
- HEADER
-
-   Field Label            Value              Internal Field ID
-   ──────────────────────────────────────────────────────────────────
-   Internal ID            1                  id
-   Document Number        INV-1              tranid
-   Customer               Fiverr             entity
-   Date                   01/15/2026         trandate
-   Status                 Open               status
-
- FINANCIAL SUMMARY
-
-   Field Label            Value              Internal Field ID
-   ──────────────────────────────────────────────────────────────────
-   Amount Remaining       $10,000.00         amountremaining           ← SUM target
-─────────────────────────────────────────────────────────────────────────────────
-```
-
----
-## 4. The Process Code - Implementation Analysis
+## 3. The Process Code - Implementation Analysis
 
 The implementation is written in **SuiteScript 2.1** and lives in [`netsuite-ar/src/NetSuiteARManager.js`](netsuite-ar/src/NetSuiteARManager.js). It runs **natively inside NetSuite** as a Scheduled Script, using the platform's built-in modules — no external HTTP client or authentication setup required.
 
@@ -430,7 +478,7 @@ define(['N/query', 'N/record', 'N/log'], (query, record, log) => {
 Parameterized Query: `params: [parentId, parentId]` binds `parentId` safely via NetSuite's query engine instead of interpolating it into the SQL string. This prevents any risk of SQL injection even on internal data.
 
 ---
-## 5. Error Handling
+## 4. Error Handling
 
 This section explains how the system handles failures in a production environment.
 
