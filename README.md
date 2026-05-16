@@ -292,43 +292,6 @@ Example: If Fiverr owes $10k and Wiz owes $13k, the system holds a temporary tot
 5. Write Back
 Finally, the system writes the total sum into the custentity_cumulative_ar field on the top-level record only. Because the process skips sub-customers in Step 1, their fields remain empty as required.
 
-The following tables demonstrate the logic across three distinct scenarios: HiBob Group (Parent-Sub), Wix Group (Parent-Sub), and Monday.com (Standalone).
-
-### Customer List View
-
-```
-Customers                                                        [New ▾] [Actions ▾]
-─────────────────────────────────────────────────────────────────────────────────────
- ☐   Edit | View   Internal ID   Name             Parent Customer   Cumulative AR
-─────────────────────────────────────────────────────────────────────────────────────
- ☐   Edit   View        1        HiBob HQ          —                  $23,000.00
- ☐   Edit   View        2        Fiverr            HiBob HQ                   —
- ☐   Edit   View        3        Wiz               HiBob HQ                   —
- ☐   Edit   View        4        Wix HQ            —                  $12,000.00
- ☐   Edit   View        5        Canva             Wix HQ                     —
- ☐   Edit   View        6        Figma             Wix HQ                     —
- ☐   Edit   View        7        Monday.com        —                   $5,000.00
-─────────────────────────────────────────────────────────────────────────────────────
- Rows 1–7 of 7
-```
-
-### Open Transactions (Invoice) List View
-
-```
-Transactions                                                     [New ▾] [Actions ▾]
-─────────────────────────────────────────────────────────────────────────────────────
- ☐   Edit | View   Internal ID   Customer          Amount Remaining   Status
-─────────────────────────────────────────────────────────────────────────────────────
- ☐   Edit   View   INV-1         Fiverr                $10,000.00     Open
- ☐   Edit   View   INV-2         Wiz                   $13,000.00     Open
- ☐   Edit   View   INV-3         Canva                  $7,000.00     Open
- ☐   Edit   View   INV-4         Figma                  $5,000.00     Open
- ☐   Edit   View   INV-5         Wix HQ                 $3,000.00     Closed
- ☐   Edit   View   INV-6         Monday.com             $5,000.00     Open
-─────────────────────────────────────────────────────────────────────────────────────
- Rows 1–6 of 6
-```
-
 • (Aggregation): For Parent IDs (1, 4), the script aggregates all associated Open debt from the entire hierarchy.
 
 • (Sub-customer Restriction): For Sub-customer IDs (2, 3, 5, 6), the custom field is explicitly left [NULL].
@@ -340,7 +303,57 @@ Transactions                                                     [New ▾] [Acti
 • Performance: The schema allows for efficient querying by filtering only for open statuses, minimizing the processing load on large historical datasets.
 
 ---
-## 3. The Process Code - Implementation Analysis
+## 3. Record Definitions
+
+The script reads and writes two NetSuite record types. Below is how each record looks when opened in NetSuite, annotated with the internal field IDs used in SuiteQL and `record.submitFields`.
+
+### Customer Record
+
+```
+Customer: HiBob HQ                                           [Edit] [Actions ▾]
+─────────────────────────────────────────────────────────────────────────────────
+ PRIMARY INFORMATION
+
+   Field Label            Value              Internal Field ID
+   ──────────────────────────────────────────────────────────────────
+   Internal ID            1                  id
+   Company Name           HiBob HQ           entityid
+   Parent Customer        —                  parent             ← NULL = top-level
+   Type                   Company            isperson
+
+ CUSTOM FIELDS
+
+   Field Label            Value              Internal Field ID
+   ──────────────────────────────────────────────────────────────────
+   Cumulative AR          $23,000.00         custentity_cumulative_ar   ← write target
+─────────────────────────────────────────────────────────────────────────────────
+```
+
+### Invoice Record (Transaction)
+
+```
+Invoice: INV-1                                               [Edit] [Actions ▾]
+─────────────────────────────────────────────────────────────────────────────────
+ HEADER
+
+   Field Label            Value              Internal Field ID
+   ──────────────────────────────────────────────────────────────────
+   Internal ID            1                  id
+   Document Number        INV-1              tranid
+   Customer               Fiverr             entity
+   Date                   01/15/2026         trandate
+   Status                 Open               status
+
+ FINANCIAL SUMMARY
+
+   Field Label            Value              Internal Field ID
+   ──────────────────────────────────────────────────────────────────
+   Amount Remaining       $10,000.00         amountremaining           ← SUM target
+─────────────────────────────────────────────────────────────────────────────────
+```
+
+---
+## 4. The Process Code - Implementation Analysis
 
 The implementation is written in **SuiteScript 2.1** and lives in [`netsuite-ar/src/NetSuiteARManager.js`](netsuite-ar/src/NetSuiteARManager.js). It runs **natively inside NetSuite** as a Scheduled Script, using the platform's built-in modules — no external HTTP client or authentication setup required.
 
@@ -417,7 +430,7 @@ define(['N/query', 'N/record', 'N/log'], (query, record, log) => {
 Parameterized Query: `params: [parentId, parentId]` binds `parentId` safely via NetSuite's query engine instead of interpolating it into the SQL string. This prevents any risk of SQL injection even on internal data.
 
 ---
-## 4. Error Handling
+## 5. Error Handling
 
 This section explains how the system handles failures in a production environment.
 
