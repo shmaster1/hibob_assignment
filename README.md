@@ -203,7 +203,7 @@ The system utilizes a relational schema with a self-referencing hierarchy and li
 erDiagram
     CUSTOMER {
         int     id                       PK
-        string  entityid
+        string  name
         int     parent                   FK
         decimal custentity_cumulative_ar
     }
@@ -212,8 +212,6 @@ erDiagram
         int     entity           FK
         decimal amount_remaining
         string  status
-        boolean mainline
-        string  type
     }
     CUSTOMER ||--o{ CUSTOMER : "parent → subcustomer (self-join, 1-to-many)"
     CUSTOMER ||--o{ INVOICE  : "entity (1-to-many)"
@@ -223,31 +221,33 @@ erDiagram
 
 - **Customer Self-Join (1:M):** A Parent Customer can be linked to multiple Sub-customers via the `parent` field. `NULL` means the customer is a Top-Level Parent or Standalone.
 - **Customer to Invoice (1:M):** Each Customer (Parent or Sub) can have many Invoices via the `entity` foreign key.
-- **Invoice Internal Hierarchy (1:M):** Each Invoice contains one Mainline (Header) row (`mainline = T`) and multiple Line Item rows (`mainline = F`).
 
 ### Customers:
 | Field | Type | Notes |
 |---|---|---|
 | `id` | Integer (PK) | Internal NetSuite ID |
-| `entityid` | String | Display name, e.g. `"1 (HiBob HQ)"` |
+| `name` | String | Display name, e.g. `"HiBob HQ"` |
 | `parent` | Integer (FK → Customers.id) | `NULL` for Parents/Standalones |
 | `custentity_cumulative_ar` | Decimal | Target custom field for aggregation |
 
-### Invoices (Transaction record, type = `CustInvc`):
+### Invoices:
 | Field | Type | Notes |
 |---|---|---|
-| `id` | Integer (PK) | Internal NetSuite transaction ID |
+| `id` | Integer (PK) | Internal NetSuite invoice ID |
 | `entity` | Integer (FK → Customers.id) | The customer this invoice belongs to |
 | `amount_remaining` | Decimal | Outstanding open balance |
 | `status` | String | `'open'` or `'closed'` |
-| `mainline` | Boolean | `T` = Header total, `F` = Line item |
+
+## Assumptions
+
+- The customer hierarchy is **2 levels deep only**: a top-level parent and its direct subcustomers. Sub-subcustomers (grandchildren) are not supported — the SuiteQL subquery fetches only direct children (`WHERE parent = parentId`), so any deeper nesting would be silently excluded from the AR total.
 
 ## 2. Step-by-Step Process Flow
 This section describes the logical journey the system takes to ensure data accuracy and hierarchy integrity.
 
 ```mermaid
 flowchart TD
-    A([Start]) --> B["Query: SELECT id, entityid FROM customer\nWHERE parent IS NULL"]
+    A([Start]) --> B["Query: SELECT id, name FROM customer\nWHERE parent IS NULL"]
     B --> C{More top-level\ncustomers?}
     C -- No --> Z([End])
     C -- Yes --> D[Get next top-level customer]
@@ -255,7 +255,7 @@ flowchart TD
     E -- Yes, Parent --> F["Scope = parent + all subcustomers\n(entity = parentId OR parent = parentId)"]
     E -- No, Standalone --> G["Scope = customer only\n(entity = customerId)"]
     F --> H
-    G --> H["SuiteQL: SUM(amountremaining)\nWHERE type='CustInvc'\nAND status='open'\nAND mainline='T'"]
+    G --> H["SuiteQL: SUM(amountremaining)\nWHERE status='open'"]
     H --> I{Query\nsucceeded?}
     I -- No --> J["Log error, skip customer"]
     J --> C
@@ -278,13 +278,11 @@ If it’s a Parent (e.g., HiBob), the scope includes itself and all subcustomers
 If it’s a Standalone (e.g., Monday.com), the scope is limited to itself.
 
 3. Financial Data Extraction (Filtering)
-The system queries the invoice table with three filters to ensure the sum is accurate:
+The system queries the invoice table with two filters to ensure the sum is accurate:
 
 Entity Match: It only looks at invoices belonging to the "Family Tree" identified in Step 2.
 
 Status Check: It ignores any invoices with a status of 'closed', focusing strictly on 'open' balances.
-
-Mainline Isolation: It filters for Mainline = T. This ensures the script only reads the total bill amount from the header, ignoring individual item lines to avoid double-counting.
 
 4. Aggregation
 The system sums the amount_remaining from all valid invoices found in the previous step.
@@ -298,33 +296,31 @@ The following tables demonstrate the logic across three distinct scenarios: HiBo
 
 ### Customer Entity Table
 ```sql
-postgres=# SELECT id, entity_id, parent_fk, custentity_cumulative_ar, type FROM customers;
+postgres=# SELECT id, name, parent_fk, custentity_cumulative_ar FROM customers;
 
- id | entity_id (Name) | parent_fk | custentity_cumulative_ar | Type       
-----+------------------+-----------+--------------------------+------------
-  1 | 1 (HiBob HQ)     | [NULL]    | 23000                    | Parent     
-  2 | 2 (Fiverr)       | 1         | [NULL]                   | Sub        
-  3 | 3 (Wiz)          | 1         | [NULL]                   | Sub        
-  4 | 4 (Wix HQ)       | [NULL]    | 12000                    | Parent     
-  5 | 5 (Canva)        | 4         | [NULL]                   | Sub        
-  6 | 6 (Figma)        | 4         | [NULL]                   | Sub        
-  7 | 7 (Monday.com)   | [NULL]    | 5000                     | Standalone 
+ id | name         | parent_fk | custentity_cumulative_ar
+----+--------------+-----------+--------------------------
+  1 | HiBob HQ     | [NULL]    | 23000
+  2 | Fiverr       | 1         | [NULL]
+  3 | Wiz          | 1         | [NULL]
+  4 | Wix HQ       | [NULL]    | 12000
+  5 | Canva        | 4         | [NULL]
+  6 | Figma        | 4         | [NULL]
+  7 | Monday.com   | [NULL]    | 5000
 ```
 
 ### Invoice Transaction Table
 ```sql
+postgres=# SELECT id, entity_fk, amount_remaining, status FROM invoices;
 
-postgres=# SELECT id, entity_fk, amount_remaining, status, mainline FROM invoices;
-
- id | entity_fk    | amount_remaining | status | mainline | Calculation Impact
-----+--------------+------------------+--------+----------+-------------------------------
-  1 | 2 (Fiverr)   | 10000            | open   | T        | Rolls up to HiBob
-  2 | 3 (Wiz)      | 13000            | open   | T        | Rolls up to HiBob
-  3 | 5 (Canva)    | 7000             | open   | T        | Rolls up to Wix
-  4 | 6 (Figma)    | 5000             | open   | T        | Rolls up to Wix
-  5 | 5 (Canva)    | 7000             | open   | F        | Ignored (Line Item)
-  6 | 4 (Wix)      | 3000             | closed | T        | Ignored (Paid status)
-  7 | 7 (Monday)   | 5000             | open   | T        | Applied to Monday.com (Self)
+ id | entity_fk  | amount_remaining | status | Calculation Impact
+----+------------+------------------+--------+-------------------------------
+  1 | Fiverr     | 10000            | open   | Rolls up to HiBob
+  2 | Wiz        | 13000            | open   | Rolls up to HiBob
+  3 | Canva      | 7000             | open   | Rolls up to Wix
+  4 | Figma      | 5000             | open   | Rolls up to Wix
+  5 | Wix HQ     | 3000             | closed | Ignored (closed status)
+  6 | Monday.com | 5000             | open   | Applied to Monday.com (Self)
 ```
 
 • (Aggregation): For Parent IDs (1, 4), the script aggregates all associated Open debt from the entire hierarchy.
@@ -335,120 +331,110 @@ postgres=# SELECT id, entity_fk, amount_remaining, status, mainline FROM invoice
 
 • Scalability: By using a parent FK in the ERD, the system supports multi-level nesting while specifically targeting the top-level entity for calculation.
 
-• Integrity: The mainline: T filter ensures that the script only reads the authoritative header total, preventing artificial inflation caused by summing individual line items.
-
 • Performance: The schema allows for efficient querying by filtering only for open statuses, minimizing the processing load on large historical datasets.
 
 ---
 ## 3. The Process Code - Implementation Analysis
 
-The implementation is written in **TypeScript** and lives in [`netsuite-ar/src/NetSuiteARManager.ts`](netsuite-ar/src/NetSuiteARManager.ts). It uses `axios` for HTTP calls and the NetSuite SuiteQL REST API for all queries.
+The implementation is written in **SuiteScript 2.1** and lives in [`netsuite-ar/src/NetSuiteARManager.js`](netsuite-ar/src/NetSuiteARManager.js). It runs **natively inside NetSuite** as a Scheduled Script, using the platform's built-in modules — no external HTTP client or authentication setup required.
 
-```typescript
-import axios from 'axios';
-import { Customer, TokenDetails, ARQuery } from './types';
+```javascript
+/**
+ * @NScriptType ScheduledScript
+ * @NApiVersion 2.1
+ */
+define(['N/query', 'N/record', 'N/log'], (query, record, log) => {
 
-export class NetSuiteARManager {
-  private baseUrl: string;
-  private suiteqlEndpoint: string;
-  private headers: Record<string, string>;
-
-  constructor(accountId: string, tokenDetails: TokenDetails) {
-    this.baseUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest`;
-    this.suiteqlEndpoint = `${this.baseUrl}/query/v1/suiteql`;
-    this.headers = {
-      Authorization: `Bearer ${tokenDetails.token}`,
-      'Content-Type': 'application/json',
-    };
+  function getTopLevelCustomers() {
+    const results = query.runSuiteQL({
+      query: `
+        SELECT c.id, c.name,
+               CASE WHEN EXISTS (SELECT 1 FROM customer s WHERE s.parent = c.id)
+                    THEN 'T' ELSE 'F' END AS isParent
+        FROM customer c
+        WHERE c.parent IS NULL
+      `
+    });
+    return results.asMappedResults();
   }
 
-  async getTopLevelCustomers(): Promise<Customer[]> {
-    const query = `SELECT id, entityid FROM customer WHERE parent IS NULL`;
-    const customers: Customer[] = [];
-    let offset = 0;
-    const limit = 1000;
-
-    while (true) {
-      const response = await axios.post(
-        `${this.suiteqlEndpoint}?limit=${limit}&offset=${offset}`,
-        { q: query },
-        { headers: this.headers }
-      );
-      const page = response.data;
-      customers.push(...(page.items ?? []));
-      if (!page.hasMore) break;
-      offset += limit;
-    }
-
-    return customers;
-  }
-
-  async calculateCumulativeAR(parentId: number): Promise<number | null> {
-    const query = `
-      SELECT SUM(amountremaining) AS total_ar
-      FROM transaction
-      WHERE type = 'CustInvc'
-      AND (entity = ${parentId} OR entity IN (SELECT id FROM customer WHERE parent = ${parentId}))
-      AND status = 'open'
-      AND mainline = 'T'
-    `;
-
+  function calculateCumulativeAR(parentId, isParent) {
+    const sql = isParent === 'T'
+      ? `SELECT SUM(amountremaining) AS total_ar
+         FROM transaction
+         WHERE type = 'CustInvc'
+           AND (entity = ? OR entity IN (SELECT id FROM customer WHERE parent = ?))
+           AND status = 'Open'
+           AND mainline = 'T'`
+      : `SELECT SUM(amountremaining) AS total_ar
+         FROM transaction
+         WHERE type = 'CustInvc'
+           AND entity = ?
+           AND status = 'Open'
+           AND mainline = 'T'`;
     try {
-      const response = await axios.post(
-        this.suiteqlEndpoint,
-        { q: query },
-        { headers: this.headers }
-      );
-      const data: ARQuery = response.data.items?.[0] ?? { total_ar: 0 };
-      return Number(data.total_ar ?? 0);
-    } catch (error) {
-      console.error(`Failed to calculate AR for parent ${parentId}:`, error);
+      const params = isParent === 'T' ? [parentId, parentId] : [parentId];
+      const results = query.runSuiteQL({ query: sql, params });
+      const rows = results.asMappedResults();
+      return Number(rows[0]?.total_ar ?? 0);
+    } catch (e) {
+      log.error({ title: `AR calculation failed for customer ${parentId}`, details: e.message });
       return null;
     }
   }
 
-  async updateParentRecord(parentId: number, amount: number): Promise<void> {
-    const endpoint = `${this.baseUrl}/record/v1/customer/${parentId}`;
-
+  function updateParentRecord(parentId, amount) {
     try {
-      const response = await axios.patch(
-        endpoint,
-        { custentity_cumulative_ar: amount },
-        { headers: this.headers }
-      );
-      if (response.status === 204) {
-        console.info(`Updated parent ${parentId} with $${amount}`);
-      } else {
-        console.error(`Unexpected status for parent ${parentId}: ${response.status}`);
-      }
-    } catch (error) {
-      console.error(`Failed to update parent ${parentId}:`, error);
+      record.submitFields({
+        type: record.Type.CUSTOMER,
+        id: parentId,
+        values: { custentity_cumulative_ar: amount }
+      });
+      log.audit({ title: 'AR Updated', details: `Customer ${parentId} updated with $${amount}` });
+    } catch (e) {
+      log.error({ title: `Update failed for customer ${parentId}`, details: e.message });
     }
   }
 
-  async runARConsolidation(): Promise<void> {
-    const customers = await this.getTopLevelCustomers();
+  function execute() {
+    const customers = getTopLevelCustomers();
     for (const customer of customers) {
-      const totalAmount = await this.calculateCumulativeAR(customer.id);
-      if (totalAmount !== null) {
-        await this.updateParentRecord(customer.id, totalAmount);
+      const total = calculateCumulativeAR(customer.id, customer.isParent);
+      if (total !== null) {
+        updateParentRecord(customer.id, total);
       }
     }
   }
-}
+
+  return { execute };
+});
 ```
+
+### Key differences from an external integration
+
+| Concern | External approach (wrong) | SuiteScript approach (correct) |
+|---|---|---|
+| Module system | `require` / `module.exports` | `define([...], fn)` AMD — SuiteScript 2.x standard |
+| Authentication | Manual Bearer token in headers | Handled by the NetSuite runtime — no credentials needed |
+| SuiteQL execution | `axios.post` to `/query/v1/suiteql` | `N/query.runSuiteQL({ query, params })` — fields match the schema: `name`, `parent`, `isParent`, `amountremaining` |
+| Record update | `axios.patch` to `/record/v1/customer/:id` | `N/record.submitFields({ type, id, values })` |
+| Logging | `console.log` / `console.error` | `N/log.audit` / `N/log.error` — visible in Script Execution Log |
+| Entry point | Class constructor + method call | `execute()` function returned from `define` |
+| SQL parameters | String interpolation (injection risk) | Bound `params` array — safe by design |
 
 ### • Performance Optimization
 
-SuiteQL over REST Records: Instead of loading every customer record (which is slow), we use SuiteQL via the `/query/v1/suiteql` endpoint. This allows the NetSuite database to do the heavy lifting of summing thousands of rows before returning only the final aggregated result to the application.
+`N/query.runSuiteQL` executes directly against the NetSuite database engine — no HTTP round-trip. The database performs the `SUM` aggregation and returns a single row per parent, which is far cheaper than loading individual records.
 
-PATCH over PUT: We use the PATCH method. Unlike PUT, which replaces the entire record, PATCH only sends the `custentity_cumulative_ar` field — leaving all other fields untouched even if another process edited them concurrently.
+`N/record.submitFields` is equivalent to a field-level update: it only writes `custentity_cumulative_ar` without touching any other fields, just like a `PATCH` would — but entirely within the platform with no REST overhead.
 
 ### • Data Validation
 
-The "Mainline" Logic: The query explicitly filters for `mainline = 'T'`. This ensures the script only reads the authoritative header total, preventing artificially inflated debt totals from line-item duplication.
+The "Mainline" Logic: The query filters for `mainline = 'T'`, which isolates the transaction header row (the authoritative total) and excludes individual line items. Without this filter, every line on an invoice would be counted separately, artificially inflating the AR total.
 
-Type Casting: Using `Number(data.total_ar ?? 0)` handles cases where a customer has no open invoices (SuiteQL returns `null`). It coerces the value into a clean number before it is committed to NetSuite.
+Parameterized Query: `params: [parentId, parentId]` binds `parentId` safely via NetSuite's query engine instead of interpolating it into the SQL string. This prevents any risk of SQL injection even on internal data.
+
+Type Casting: `Number(rows[0]?.total_ar ?? 0)` handles the case where a customer has no open invoices — `N/query` returns `null` for an empty `SUM`, and this coerces it to `0` before writing to the record.
 
 ---
 ## 4. Error Handling
