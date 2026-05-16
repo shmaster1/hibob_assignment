@@ -243,7 +243,6 @@ erDiagram
 The script operates on two native NetSuite record types. Below is their structure as it appears in the NetSuite Record Browser, showing only the fields relevant to this process.
 
 #### Record: Customer (`customer`)
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  RECORD TYPE: Customer                                                      │
@@ -273,7 +272,6 @@ The script operates on two native NetSuite record types. Below is their structur
 ```
 
 #### Record: Invoice (`transaction`)
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  RECORD TYPE: Invoice                                                       │
