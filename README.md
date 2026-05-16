@@ -209,18 +209,18 @@ erDiagram
     }
     INVOICE {
         int     id               PK
-        int     entity           FK
+        int     customer_id      FK
         decimal amount_remaining
         string  status
     }
     CUSTOMER ||--o{ CUSTOMER : "parent → subcustomer (self-join, 1-to-many)"
-    CUSTOMER ||--o{ INVOICE  : "entity (1-to-many)"
+    CUSTOMER ||--o{ INVOICE  : "customer_id (1-to-many)"
 ```
 
 **Relationships Map**
 
 - **Customer Self-Join (1:M):** A Parent Customer can be linked to multiple Sub-customers via the `parent` field. `NULL` means the customer is a Top-Level Parent or Standalone.
-- **Customer to Invoice (1:M):** Each Customer (Parent or Sub) can have many Invoices via the `entity` foreign key.
+- **Customer to Invoice (1:M):** Each Customer (Parent or Sub) can have many Invoices via the `customer_id` foreign key.
 
 ### Customers:
 | Field | Type | Notes |
@@ -231,12 +231,12 @@ erDiagram
 | `custentity_cumulative_ar` | Decimal | Target custom field for aggregation |
 
 ### Invoices:
-| Field | Type | Notes |
-|---|---|---|
-| `id` | Integer (PK) | Internal NetSuite invoice ID |
-| `entity` | Integer (FK → Customers.id) | The customer this invoice belongs to |
+| Field              | Type | Notes |
+|--------------------|---|---|
+| `id`               | Integer (PK) | Internal NetSuite invoice ID |
+| `customer_id`      | Integer (FK → Customers.id) | The customer this invoice belongs to |
 | `amount_remaining` | Decimal | Outstanding open balance |
-| `status` | String | `'open'` or `'closed'` |
+| `status`           | String | `'open'` or `'closed'` |
 
 ## Assumptions
 
@@ -252,8 +252,8 @@ flowchart TD
     C -- No --> Z([End])
     C -- Yes --> D[Get next top-level customer]
     D --> E{Has subcustomers?}
-    E -- Yes, Parent --> F["Scope = parent + all subcustomers\n(entity = parentId OR parent = parentId)"]
-    E -- No, Standalone --> G["Scope = customer only\n(entity = customerId)"]
+    E -- Yes, Parent --> F["Scope = parent + all subcustomers\n(customer_id = parentId OR parent = parentId)"]
+    E -- No, Standalone --> G["Scope = customer only\n(customer_id = customerId)"]
     F --> H
     G --> H["SuiteQL: SUM(amountremaining)\nWHERE status='open'"]
     H --> I{Query\nsucceeded?}
@@ -311,9 +311,9 @@ postgres=# SELECT id, name, parent_fk, custentity_cumulative_ar FROM customers;
 
 ### Invoice Transaction Table
 ```sql
-postgres=# SELECT id, entity_fk, amount_remaining, status FROM invoices;
+postgres=# SELECT id, customer_id, amount_remaining, status FROM invoices;
 
- id | entity_fk  | amount_remaining | status | Calculation Impact
+ id | customer_id | amount_remaining | status | Calculation Impact
 ----+------------+------------------+--------+-------------------------------
   1 | Fiverr     | 10000            | open   | Rolls up to HiBob
   2 | Wiz        | 13000            | open   | Rolls up to HiBob
@@ -362,21 +362,17 @@ define(['N/query', 'N/record', 'N/log'], (query, record, log) => {
     const sql = isParent === 'T'
       ? `SELECT SUM(amountremaining) AS total_ar
          FROM transaction
-         WHERE type = 'CustInvc'
-           AND (entity = ? OR entity IN (SELECT id FROM customer WHERE parent = ?))
-           AND status = 'Open'
-           AND mainline = 'T'`
+         WHERE (customer_id = ? OR customer_id IN (SELECT id FROM customer WHERE parent = ?))
+           AND status = 'Open'`
       : `SELECT SUM(amountremaining) AS total_ar
          FROM transaction
-         WHERE type = 'CustInvc'
-           AND entity = ?
-           AND status = 'Open'
-           AND mainline = 'T'`;
+         WHERE customer_id = ?
+           AND status = 'Open'`;
     try {
       const params = isParent === 'T' ? [parentId, parentId] : [parentId];
       const results = query.runSuiteQL({ query: sql, params });
       const rows = results.asMappedResults();
-      return Number(rows[0]?.total_ar ?? 0);
+      return rows[0]?.total_ar ?? 0;
     } catch (e) {
       log.error({ title: `AR calculation failed for customer ${parentId}`, details: e.message });
       return null;
@@ -410,31 +406,9 @@ define(['N/query', 'N/record', 'N/log'], (query, record, log) => {
 });
 ```
 
-### Key differences from an external integration
-
-| Concern | External approach (wrong) | SuiteScript approach (correct) |
-|---|---|---|
-| Module system | `require` / `module.exports` | `define([...], fn)` AMD — SuiteScript 2.x standard |
-| Authentication | Manual Bearer token in headers | Handled by the NetSuite runtime — no credentials needed |
-| SuiteQL execution | `axios.post` to `/query/v1/suiteql` | `N/query.runSuiteQL({ query, params })` — fields match the schema: `name`, `parent`, `isParent`, `amountremaining` |
-| Record update | `axios.patch` to `/record/v1/customer/:id` | `N/record.submitFields({ type, id, values })` |
-| Logging | `console.log` / `console.error` | `N/log.audit` / `N/log.error` — visible in Script Execution Log |
-| Entry point | Class constructor + method call | `execute()` function returned from `define` |
-| SQL parameters | String interpolation (injection risk) | Bound `params` array — safe by design |
-
-### • Performance Optimization
-
-`N/query.runSuiteQL` executes directly against the NetSuite database engine — no HTTP round-trip. The database performs the `SUM` aggregation and returns a single row per parent, which is far cheaper than loading individual records.
-
-`N/record.submitFields` is equivalent to a field-level update: it only writes `custentity_cumulative_ar` without touching any other fields, just like a `PATCH` would — but entirely within the platform with no REST overhead.
-
 ### • Data Validation
 
-The "Mainline" Logic: The query filters for `mainline = 'T'`, which isolates the transaction header row (the authoritative total) and excludes individual line items. Without this filter, every line on an invoice would be counted separately, artificially inflating the AR total.
-
 Parameterized Query: `params: [parentId, parentId]` binds `parentId` safely via NetSuite's query engine instead of interpolating it into the SQL string. This prevents any risk of SQL injection even on internal data.
-
-Type Casting: `Number(rows[0]?.total_ar ?? 0)` handles the case where a customer has no open invoices — `N/query` returns `null` for an empty `SUM`, and this coerces it to `0` before writing to the record.
 
 ---
 ## 4. Error Handling
