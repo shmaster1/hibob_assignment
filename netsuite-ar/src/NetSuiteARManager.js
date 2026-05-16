@@ -1,89 +1,69 @@
-const axios = require('axios');
+/**
+ * @NScriptType ScheduledScript
+ * @NApiVersion 2.1
+ */
+define(['N/query', 'N/record', 'N/log'], (query, record, log) => {
 
-class NetSuiteARManager {
-  constructor(accountId, tokenDetails) {
-    this.baseUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest`;
-    this.suiteqlEndpoint = `${this.baseUrl}/query/v1/suiteql`;
-    this.headers = {
-      Authorization: `Bearer ${tokenDetails.token}`,
-      'Content-Type': 'application/json',
-    };
+  function getTopLevelCustomers() {
+    const results = query.runSuiteQL({
+      query: `
+        SELECT c.id, c.name,
+               CASE WHEN EXISTS (SELECT 1 FROM customer s WHERE s.parent = c.id)
+                    THEN 'T' ELSE 'F' END AS isParent
+        FROM customer c
+        WHERE c.parent IS NULL
+      `
+    });
+    return results.asMappedResults();
   }
 
-  async getTopLevelCustomers() {
-    const query = `SELECT id, entityid FROM customer WHERE parent IS NULL`;
-    const customers = [];
-    let offset = 0;
-    const limit = 1000;
-
-    while (true) {
-      const response = await axios.post(
-        `${this.suiteqlEndpoint}?limit=${limit}&offset=${offset}`,
-        { q: query },
-        { headers: this.headers }
-      );
-      const page = response.data;
-      customers.push(...(page.items ?? []));
-      if (!page.hasMore) break;
-      offset += limit;
-    }
-
-    return customers;
-  }
-
-  async calculateCumulativeAR(parentId) {
-    const query = `
-      SELECT SUM(amountremaining) AS total_ar
-      FROM transaction
-      WHERE type = 'CustInvc'
-      AND (entity = ${parentId} OR entity IN (SELECT id FROM customer WHERE parent = ${parentId}))
-      AND status = 'open'
-      AND mainline = 'T'
-    `;
-
+  function calculateCumulativeAR(parentId, isParent) {
+    const sql = isParent === 'T'
+      ? `SELECT SUM(amountremaining) AS total_ar
+         FROM transaction
+         WHERE type = 'CustInvc'
+           AND (entity = ? OR entity IN (SELECT id FROM customer WHERE parent = ?))
+           AND status = 'Open'
+           AND mainline = 'T'`
+      : `SELECT SUM(amountremaining) AS total_ar
+         FROM transaction
+         WHERE type = 'CustInvc'
+           AND entity = ?
+           AND status = 'Open'
+           AND mainline = 'T'`;
     try {
-      const response = await axios.post(
-        this.suiteqlEndpoint,
-        { q: query },
-        { headers: this.headers }
-      );
-      const data = response.data.items?.[0] ?? { total_ar: 0 };
-      return Number(data.total_ar ?? 0);
-    } catch (error) {
-      console.error(`Failed to calculate AR for parent ${parentId}:`, error);
+      const params = isParent === 'T' ? [parentId, parentId] : [parentId];
+      const results = query.runSuiteQL({ query: sql, params });
+      const rows = results.asMappedResults();
+      return Number(rows[0]?.total_ar ?? 0);
+    } catch (e) {
+      log.error({ title: `AR calculation failed for customer ${parentId}`, details: e.message });
       return null;
     }
   }
 
-  async updateParentRecord(parentId, amount) {
-    const endpoint = `${this.baseUrl}/record/v1/customer/${parentId}`;
-
+  function updateParentRecord(parentId, amount) {
     try {
-      const response = await axios.patch(
-        endpoint,
-        { custentity_cumulative_ar: amount },
-        { headers: this.headers }
-      );
-      if (response.status === 204) {
-        console.info(`Updated parent ${parentId} with $${amount}`);
-      } else {
-        console.error(`Unexpected status for parent ${parentId}: ${response.status}`);
-      }
-    } catch (error) {
-      console.error(`Failed to update parent ${parentId}:`, error);
+      record.submitFields({
+        type: record.Type.CUSTOMER,
+        id: parentId,
+        values: { custentity_cumulative_ar: amount }
+      });
+      log.audit({ title: 'AR Updated', details: `Customer ${parentId} updated with $${amount}` });
+    } catch (e) {
+      log.error({ title: `Update failed for customer ${parentId}`, details: e.message });
     }
   }
 
-  async runARConsolidation() {
-    const customers = await this.getTopLevelCustomers();
+  function execute() {
+    const customers = getTopLevelCustomers();
     for (const customer of customers) {
-      const totalAmount = await this.calculateCumulativeAR(customer.id);
-      if (totalAmount !== null) {
-        await this.updateParentRecord(customer.id, totalAmount);
+      const total = calculateCumulativeAR(customer.id, customer.isParent);
+      if (total !== null) {
+        updateParentRecord(customer.id, total);
       }
     }
   }
-}
 
-module.exports = { NetSuiteARManager };
-
+  return { execute };
+});
