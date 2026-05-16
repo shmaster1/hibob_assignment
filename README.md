@@ -155,7 +155,6 @@ postgres=# SELECT * FROM invoice;
   4 |           4 |        2100 | Apr-01-2026  | ERP-10045      | confirmed
   5 |           5 |        4300 | Apr-12-2026  | NULL           | failed
 ```
-
 ---
 
 
